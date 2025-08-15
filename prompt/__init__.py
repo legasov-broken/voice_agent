@@ -1,1 +1,1 @@
-from . import extract_info
+from . import agent_prompt

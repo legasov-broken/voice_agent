@@ -21,7 +21,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from agent.extract_info import extract_info
+from agent.agent_v1 import root_agent
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
@@ -41,7 +41,7 @@ async def start_agent_session(user_id, is_audio=False):
     # Create a Runner
     runner = InMemoryRunner(
         app_name=APP_NAME,
-        agent=extract_info,
+        agent=root_agent,
     )
 
     # Create a Session
@@ -61,7 +61,7 @@ async def start_agent_session(user_id, is_audio=False):
             language_code="vi-VN",
             voice_config=types.VoiceConfig(
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                    voice_name="Aoede"
+                    voice_name="Leda"
                 )
             ),
         ),

@@ -1,10 +1,10 @@
 {
-    "time": "2025-08-14 12:00:00",
-    "amount": "200000",
-    "receiver_name": "Nguyễn Văn Tuấn",
-    "receiver_account": "123",
-    "receiver_bank": "Vietcombank",
-    "channel": "Mobile Banking",
+    "time": "2025-08-16 08:00:00",
+    "amount": "50000",
+    "receiver_name": "Nguyễn Văn Nam",
+    "receiver_account": "567",
+    "receiver_bank": "Agribank",
+    "channel": "Internet Banking",
     "content": "Không có lỗi gì cả",
-    "status": "Đã bị trừ"
+    "status": "Đã bị trừ tiền"
 }

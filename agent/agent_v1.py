@@ -3,9 +3,15 @@ from google.genai import types
 import json
 from prompt.agent_prompt import EXTRACT_INFO_INSTRUCTION, GLOBAL_INTRUCTION, GET_INFO_INSTRUCTION, SYSTEM_INSTRUCTION
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
 # Global variable để lưu websocket connections
 websocket_connections = {}
+
+# MODEL = "gemini-2.5-flash-preview-native-audio-dialog"
+MODEL = os.getenv("MODEL", "gemini-live-2.5-flash-preview")
 
 def verify_user_info(name: str, id: str):
     """
@@ -117,7 +123,7 @@ def broadcast_data(data):
 # xác nhận thông tin người dùng
 extract_info = Agent(
    name="extract_info",
-   model="gemini-live-2.5-flash-preview",
+   model=MODEL,
    instruction=EXTRACT_INFO_INSTRUCTION,
    global_instruction=GLOBAL_INTRUCTION,
    tools=[verify_user_info],
@@ -127,7 +133,7 @@ extract_info = Agent(
 # bóc thông tin người dùng
 get_info = Agent(
     name="get_info",
-    model="gemini-live-2.5-flash-preview",
+    model=MODEL,
     instruction= GET_INFO_INSTRUCTION,
     global_instruction= GLOBAL_INTRUCTION,
     tools=[save_transaction_info, convert_date_format],
@@ -135,7 +141,7 @@ get_info = Agent(
 
 pipeline_agent = Agent(
     name = "pipeline_agent",
-    model = "gemini-live-2.5-flash-preview",
+    model = MODEL,
     instruction= SYSTEM_INSTRUCTION,
     sub_agents=[extract_info, get_info]
 )

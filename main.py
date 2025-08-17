@@ -29,12 +29,17 @@ load_dotenv()
 
 APP_NAME = "ADK Streaming example"
 
+session = None
+runner = None
+
 async def start_agent_session(user_id, is_audio=False):
     """Starts an agent session"""
     runner = InMemoryRunner(
         app_name=APP_NAME,
         agent=root_agent,
     )
+    
+    
 
     session = await runner.session_service.create_session(
         app_name=APP_NAME,
@@ -62,7 +67,9 @@ async def start_agent_session(user_id, is_audio=False):
         live_request_queue=live_request_queue,
         run_config=run_config,
     )
-    return live_events, live_request_queue
+    # return live_events, live_request_queue
+    
+    return live_events, live_request_queue, session, runner  # Thêm session, runner
 
 async def agent_to_client_messaging(websocket, live_events):
     """Agent to client communication"""
@@ -141,7 +148,9 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, is_audio: str):
     websocket_connections[user_id_str] = websocket
 
     try:
-        live_events, live_request_queue = await start_agent_session(user_id_str, is_audio == "true")
+        # live_events, live_request_queue = await start_agent_session(user_id_str, is_audio == "true")
+        
+        live_events, live_request_queue, session, runner = await start_agent_session(user_id_str, is_audio == "true")
 
         agent_to_client_task = asyncio.create_task(
             agent_to_client_messaging(websocket, live_events)
@@ -156,6 +165,22 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, is_audio: str):
         live_request_queue.close()
 
     finally:
-        # Remove from connections registry
+        # # Remove from connections registry
+        # websocket_connections.pop(user_id_str, None)
+        # print(f"Client #{user_id} disconnected")
+        
         websocket_connections.pop(user_id_str, None)
+    
+        # Delete session if exists
+        if session and runner:
+            try:
+                await runner.session_service.delete_session(
+                    app_name=APP_NAME,
+                    user_id=user_id_str,
+                    session_id=session.id
+                )
+                print(f"Session {session.id} deleted for user {user_id_str}")
+            except Exception as e:
+                print(f"Error deleting session: {e}")
+        
         print(f"Client #{user_id} disconnected")

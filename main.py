@@ -48,7 +48,7 @@ async def start_agent_session(user_id, is_audio=False):
             language_code="vi-VN",
             voice_config=types.VoiceConfig(
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                    voice_name="Leda"
+                    voice_name="Zephyr"
                 )
             ),
         ),

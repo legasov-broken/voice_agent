@@ -1,4 +1,4 @@
- <!DOCTYPE html>
+ <!-- <!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
@@ -426,6 +426,772 @@
         // WebSocket và Audio setup
         const sessionId = Math.random().toString().substring(10);
         const wsUrl = `ws://${window.location.host}/ws/${sessionId}`;
+        let websocket = null;
+        let isAudioMode = false;
+        let isListening = false;
+        let isSpeaking = false;
+        let currentMessageId = null;
+
+        // Audio components
+        let audioPlayerNode = null;
+        let audioRecorderNode = null;
+        let audioContext = null;
+        let micStream = null;
+        let audioBuffer = [];
+        let bufferTimer = null;
+
+        // DOM elements
+        const statusEl = document.getElementById('status');
+        const chatContainer = document.getElementById('chatContainer');
+        const voiceButton = document.getElementById('voiceButton');
+        const textInput = document.getElementById('textInput');
+        const sendButton = document.getElementById('sendButton');
+        const volumeBar = document.getElementById('volumeBar');
+
+        // WebSocket functions
+        function connectWebSocket() {
+            websocket = new WebSocket(`${wsUrl}?is_audio=${isAudioMode}`);
+            
+            websocket.onopen = () => {
+                updateStatus('connected', '✅ Đã kết nối - Sẵn sàng hỗ trợ');
+                textInput.disabled = false;
+                sendButton.disabled = false;
+            };
+
+            websocket.onmessage = handleWebSocketMessage;
+            
+            websocket.onclose = () => {
+                updateStatus('error', '❌ Mất kết nối - Đang thử kết nối lại...');
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            websocket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                updateStatus('error', '❌ Lỗi kết nối');
+            };
+        }
+
+        function handleWebSocketMessage(event) {
+            const message = JSON.parse(event.data);
+            
+            // Handle data from function calls
+            if (message.type === 'user_verification') {
+                updateUserVerification(message.data);
+                return;
+            }
+
+            if (message.type === 'transaction_data') {
+                updateTransactionData(message.data);
+                return;
+            }
+            
+            if (message.turn_complete) {
+                currentMessageId = null;
+                setIsSpeaking(false);
+                if (isAudioMode) {
+                    startListening();
+                }
+                return;
+            }
+
+            if (message.interrupted) {
+                if (audioPlayerNode) {
+                    audioPlayerNode.port.postMessage({ command: "endOfAudio" });
+                }
+                setIsSpeaking(false);
+                return;
+            }
+
+            if (message.mime_type === 'audio/pcm' && audioPlayerNode) {
+                setIsSpeaking(true);
+                stopListening();
+                audioPlayerNode.port.postMessage(base64ToArrayBuffer(message.data));
+            }
+
+            if (message.mime_type === 'text/plain') {
+                if (!currentMessageId) {
+                    currentMessageId = addMessage('', 'agent');
+                }
+                updateMessage(currentMessageId, message.data);
+            }
+        }
+
+        // Update user verification status
+        function updateUserVerification(data) {
+            const statusEl = document.getElementById('verificationStatus');
+            const userNameEl = document.getElementById('userName');
+            const userIdEl = document.getElementById('userId');
+
+            userNameEl.textContent = data.name;
+            userIdEl.textContent = data.id;
+
+            if (data.verified) {
+                statusEl.className = 'verification-status verified';
+                statusEl.textContent = '✅ Đã xác minh thành công';
+            } else {
+                statusEl.className = 'verification-status failed';
+                statusEl.textContent = '❌ Xác minh thất bại';
+            }
+        }
+
+        // Update transaction data
+        function updateTransactionData(data) {
+            document.getElementById('transactionTime').textContent = data.time;
+            document.getElementById('transactionAmount').textContent = data.amount + ' VNĐ';
+            document.getElementById('receiverName').textContent = data.receiver_name;
+            document.getElementById('receiverAccount').textContent = data.receiver_account;
+            document.getElementById('receiverBank').textContent = data.receiver_bank;
+            document.getElementById('transactionChannel').textContent = data.channel;
+            document.getElementById('transactionContent').textContent = data.content;
+            document.getElementById('transactionStatus').textContent = data.status;
+
+            // Show transaction info section
+            document.getElementById('transactionInfo').style.display = 'block';
+        }
+
+        // Audio functions
+        async function initAudio() {
+            try {
+                // Audio player
+                audioContext = new AudioContext({ sampleRate: 24000 });
+                await audioContext.audioWorklet.addModule('/static/js/pcm-player-processor.js');
+                audioPlayerNode = new AudioWorkletNode(audioContext, 'pcm-player-processor');
+                audioPlayerNode.connect(audioContext.destination);
+
+                // Audio recorder
+                const recorderContext = new AudioContext({ sampleRate: 16000 });
+                await recorderContext.audioWorklet.addModule('/static/js/pcm-recorder-processor.js');
+                
+                micStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: { channelCount: 1 } 
+                });
+                
+                const source = recorderContext.createMediaStreamSource(micStream);
+                audioRecorderNode = new AudioWorkletNode(recorderContext, 'pcm-recorder-processor');
+                source.connect(audioRecorderNode);
+                
+                audioRecorderNode.port.onmessage = handleAudioData;
+                
+                return true;
+            } catch (error) {
+                console.error('Audio initialization failed:', error);
+                return false;
+            }
+        }
+
+        function handleAudioData(event) {
+            if (!isListening) return;
+            
+            const pcmData = convertFloat32ToPCM(event.data);
+            audioBuffer.push(new Uint8Array(pcmData));
+            
+            // Update volume indicator
+            const volume = calculateVolume(event.data);
+            volumeBar.style.width = `${Math.min(volume * 100, 100)}%`;
+            
+            if (!bufferTimer) {
+                bufferTimer = setInterval(sendBufferedAudio, 200);
+            }
+        }
+
+        function sendBufferedAudio() {
+            if (audioBuffer.length === 0) return;
+            
+            const totalLength = audioBuffer.reduce((sum, chunk) => sum + chunk.length, 0);
+            const combinedBuffer = new Uint8Array(totalLength);
+            let offset = 0;
+            
+            for (const chunk of audioBuffer) {
+                combinedBuffer.set(chunk, offset);
+                offset += chunk.length;
+            }
+            
+            sendMessage({
+                mime_type: 'audio/pcm',
+                data: arrayBufferToBase64(combinedBuffer.buffer)
+            });
+            
+            audioBuffer = [];
+        }
+
+        // UI functions
+        function updateStatus(type, message) {
+            statusEl.className = `status ${type}`;
+            statusEl.textContent = message;
+        }
+
+        function addMessage(content, sender) {
+            const messageId = `msg_${Date.now()}`;
+            const messageEl = document.createElement('div');
+            messageEl.id = messageId;
+            messageEl.className = `message ${sender}`;
+            messageEl.textContent = content;
+            chatContainer.appendChild(messageEl);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            return messageId;
+        }
+
+        function updateMessage(messageId, additionalContent) {
+            const messageEl = document.getElementById(messageId);
+            if (messageEl) {
+                messageEl.textContent += additionalContent;
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        }
+
+        function setIsListening(listening) {
+            isListening = listening;
+            voiceButton.className = `voice-button ${listening ? 'listening' : 'start'}`;
+            voiceButton.textContent = listening ? '🔴' : '🎤';
+            voiceButton.title = listening ? 'Đang nghe...' : 'Bấm để nói';
+        }
+
+        function setIsSpeaking(speaking) {
+            isSpeaking = speaking;
+            if (speaking) {
+                voiceButton.className = 'voice-button speaking';
+                voiceButton.textContent = '🔊';
+                voiceButton.title = 'Đang phản hồi...';
+            }
+        }
+
+        function startListening() {
+            if (!isSpeaking && isAudioMode) {
+                setIsListening(true);
+            }
+        }
+
+        function stopListening() {
+            setIsListening(false);
+            if (bufferTimer) {
+                clearInterval(bufferTimer);
+                bufferTimer = null;
+                if (audioBuffer.length > 0) {
+                    sendBufferedAudio();
+                }
+            }
+            volumeBar.style.width = '0%';
+        }
+
+        // Event handlers
+        voiceButton.addEventListener('click', async () => {
+            if (!isAudioMode) {
+                const audioInitialized = await initAudio();
+                if (audioInitialized) {
+                    isAudioMode = true;
+                    connectWebSocket(); // Reconnect with audio mode
+                    startListening();
+                } else {
+                    alert('Không thể khởi tạo audio. Vui lòng kiểm tra microphone.');
+                }
+            } else {
+                if (isListening) {
+                    stopListening();
+                } else {
+                    startListening();
+                }
+            }
+        });
+
+        textInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !sendButton.disabled) {
+                sendTextMessage();
+            }
+        });
+
+        sendButton.addEventListener('click', sendTextMessage);
+
+        function sendTextMessage() {
+            const message = textInput.value.trim();
+            if (message) {
+                addMessage(message, 'user');
+                sendMessage({
+                    mime_type: 'text/plain',
+                    data: message
+                });
+                textInput.value = '';
+            }
+        }
+
+        function sendMessage(message) {
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                websocket.send(JSON.stringify(message));
+            }
+        }
+
+        // Utility functions
+        function base64ToArrayBuffer(base64) {
+            const binaryString = atob(base64);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        function arrayBufferToBase64(buffer) {
+            const bytes = new Uint8Array(buffer);
+            let binary = '';
+            for (let i = 0; i < bytes.byteLength; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return btoa(binary);
+        }
+
+        function convertFloat32ToPCM(inputData) {
+            const pcm16 = new Int16Array(inputData.length);
+            for (let i = 0; i < inputData.length; i++) {
+                pcm16[i] = inputData[i] * 0x7fff;
+            }
+            return pcm16.buffer;
+        }
+
+        function calculateVolume(samples) {
+            let sum = 0;
+            for (let i = 0; i < samples.length; i++) {
+                sum += samples[i] * samples[i];
+            }
+            return Math.sqrt(sum / samples.length);
+        }
+
+        // Initialize connection
+        connectWebSocket();
+    </script>
+</body>
+</html> -->
+
+
+
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MBBANK Voice Assistant</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #333;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 2rem;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            width: 90%;
+            max-width: 800px;
+            text-align: center;
+        }
+
+        .main-content {
+            display: flex;
+            gap: 2rem;
+            align-items: flex-start;
+        }
+
+        .chat-section {
+            flex: 1;
+        }
+
+        .results-section {
+            width: 300px;
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 1rem;
+            border: 2px solid #e9ecef;
+            text-align: left;
+        }
+
+        .results-title {
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 1rem;
+            text-align: center;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 0.5rem;
+        }
+
+        .result-item {
+            margin: 0.75rem 0;
+            padding: 0.5rem;
+            background: white;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+
+        .result-label {
+            font-weight: 600;
+            color: #495057;
+            font-size: 0.85rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .result-value {
+            color: #2c3e50;
+            font-size: 0.9rem;
+            word-break: break-word;
+        }
+
+        .verification-status {
+            text-align: center;
+            padding: 0.75rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            font-weight: 600;
+        }
+
+        .verification-status.verified {
+            background: #d4edda;
+            color: #155724;
+            border: 2px solid #c3e6cb;
+        }
+
+        .verification-status.pending {
+            background: #fff3cd;
+            color: #856404;
+            border: 2px solid #ffeaa7;
+        }
+
+        .verification-status.failed {
+            background: #f8d7da;
+            color: #721c24;
+            border: 2px solid #f5c6cb;
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                flex-direction: column;
+            }
+            
+            .results-section {
+                width: 100%;
+            }
+        }
+
+        .header {
+            margin-bottom: 2rem;
+        }
+
+        .logo {
+            width: 120px;
+            height: 80px;
+            margin: 0 auto 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+        }
+
+        .logo img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            background: transparent;
+        }
+
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 0.5rem;
+            font-size: 1.8rem;
+        }
+
+        .subtitle {
+            color: #7f8c8d;
+            font-size: 1rem;
+        }
+
+        .chat-container {
+            background: #f8f9fa;
+            border-radius: 15px;
+            height: 400px;
+            overflow-y: auto;
+            margin: 2rem 0;
+            padding: 1rem;
+            border: 2px solid #e9ecef;
+        }
+
+        .message {
+            margin: 1rem 0;
+            padding: 0.75rem 1rem;
+            border-radius: 15px;
+            max-width: 80%;
+            word-wrap: break-word;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        .message.user {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            margin-left: auto;
+            text-align: right;
+        }
+
+        .message.agent {
+            background: #e3f2fd;
+            color: #1565c0;
+            margin-right: auto;
+            text-align: left;
+        }
+
+        .voice-controls {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            align-items: center;
+            margin: 2rem 0;
+        }
+
+        .voice-button {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .voice-button.start {
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            color: white;
+        }
+
+        .voice-button.listening {
+            background: linear-gradient(45deg, #f44336, #d32f2f);
+            color: white;
+            animation: pulse 1.5s infinite;
+        }
+
+        .voice-button.speaking {
+            background: linear-gradient(45deg, #2196F3, #1976D2);
+            color: white;
+            animation: wave 1s infinite;
+        }
+
+        .voice-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .status {
+            margin: 1rem 0;
+            padding: 0.75rem;
+            border-radius: 10px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .status.connecting {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .volume-indicator {
+            width: 100%;
+            height: 4px;
+            background: #e0e0e0;
+            border-radius: 2px;
+            margin: 1rem 0;
+            overflow: hidden;
+        }
+
+        .volume-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #4CAF50, #FFC107, #f44336);
+            width: 0%;
+            transition: width 0.1s ease;
+            border-radius: 2px;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
+        @keyframes wave {
+            0%, 100% { transform: scale(1); }
+            25% { transform: scale(1.05); }
+            50% { transform: scale(1.1); }
+            75% { transform: scale(1.05); }
+        }
+
+        .text-input-container {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+
+        .text-input {
+            flex: 1;
+            padding: 0.75rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 25px;
+            font-size: 1rem;
+            outline: none;
+            transition: border-color 0.3s ease;
+        }
+
+        .text-input:focus {
+            border-color: #667eea;
+        }
+
+        .send-button {
+            padding: 0.75rem 1.5rem;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .send-button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .send-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">
+                <img src="/static/images/logo.png" alt="Logo" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                <div style="display: none; width: 60px; height: 60px; background: linear-gradient(45deg, #FF6B6B, #4ECDC4); border-radius: 50%; color: white; font-size: 1.5rem; font-weight: bold; line-height: 60px;">MB</div>
+            </div>
+            <h1>MBBANK Voice Assistant</h1>
+            <div class="subtitle">Trợ lý chăm sóc khách hàng thông minh</div>
+        </div>
+
+        <div id="status" class="status connecting">Đang kết nối...</div>
+        
+        <div class="main-content">
+            <div class="chat-section">
+                <div id="chatContainer" class="chat-container">
+                    <div class="message agent">
+                        Xin chào! Tôi là trợ lý ảo của MBBANK. Tôi có thể hỗ trợ bạn giải quyết các vấn đề về giao dịch chuyển tiền. Bạn có thể nói hoặc nhập tin nhắn để bắt đầu cuộc trò chuyện.
+                    </div>
+                </div>
+
+                <div class="volume-indicator">
+                    <div id="volumeBar" class="volume-bar"></div>
+                </div>
+
+                <div class="voice-controls">
+                    <button id="voiceButton" class="voice-button start" title="Bấm để bắt đầu cuộc trò chuyện bằng giọng nói">
+                        🎤
+                    </button>
+                </div>
+
+                <div class="text-input-container">
+                    <input type="text" id="textInput" class="text-input" placeholder="Hoặc nhập tin nhắn tại đây..." disabled>
+                    <button id="sendButton" class="send-button" disabled>Gửi</button>
+                </div>
+            </div>
+
+            <div class="results-section">
+                <div class="results-title">📋 Thông Tin Thu Thập</div>
+                
+                <div id="verificationStatus" class="verification-status pending">
+                    ⏳ Chưa xác minh
+                </div>
+
+                <div id="userInfo">
+                    <div class="result-item">
+                        <div class="result-label">👤 Họ và tên</div>
+                        <div id="userName" class="result-value">Chưa có thông tin</div>
+                    </div>
+                    <div class="result-item">
+                        <div class="result-label">🆔 Số CCCD</div>
+                        <div id="userId" class="result-value">Chưa có thông tin</div>
+                    </div>
+                </div>
+
+                <div id="transactionInfo" style="display: none;">
+                    <div class="result-item">
+                        <div class="result-label">⏰ Thời gian</div>
+                        <div id="transactionTime" class="result-value">-</div>
+                    </div>
+                    <div class="result-item">
+                        <div class="result-label">💰 Số tiền</div>
+                        <div id="transactionAmount" class="result-value">-</div>
+                    </div>
+                    <div class="result-item">
+                        <div class="result-label">👥 Người nhận</div>
+                        <div id="receiverName" class="result-value">-</div>
+                    </div>
+                    <div class="result-item">
+                        <div class="result-label">🏦 Tài khoản nhận</div>
+                        <div id="receiverAccount" class="result-value">-</div>
+                    </div>
+                    <div class="result-item">
+                        <div class="result-label">🏛️ Ngân hàng</div>
+                        <div id="receiverBank" class="result-value">-</div>
+                    </div>
+                    <div class="result-item">
+                        <div class="result-label">📱 Kênh giao dịch</div>
+                        <div id="transactionChannel" class="result-value">-</div>
+                    </div>
+                    <div class="result-item">
+                        <div class="result-label">💬 Nội dung lỗi</div>
+                        <div id="transactionContent" class="result-value">-</div>
+                    </div>
+                    <div class="result-item">
+                        <div class="result-label">📊 Trạng thái</div>
+                        <div id="transactionStatus" class="result-value">-</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // WebSocket và Audio setup
+        const sessionId = Math.random().toString().substring(10);
+        // Auto-detect protocol for WebSocket
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/${sessionId}`;
         let websocket = null;
         let isAudioMode = false;
         let isListening = false;

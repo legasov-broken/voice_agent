@@ -21,7 +21,10 @@ from fastapi import FastAPI, WebSocket
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from agent.agent_v1 import root_agent, websocket_connections
+# from agent.agent_v1 import root_agent, websocket_connections
+
+from agent.agent_qna import root_agent, websocket_connections
+
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
@@ -38,8 +41,6 @@ async def start_agent_session(user_id, is_audio=False):
         app_name=APP_NAME,
         agent=root_agent,
     )
-    
-    
 
     session = await runner.session_service.create_session(
         app_name=APP_NAME,
@@ -57,6 +58,27 @@ async def start_agent_session(user_id, is_audio=False):
                 )
             ),
         ),
+        # output_audio_transcription=True,
+        # input_audio_transcription=True,
+        # realtime_input_config=types.RealtimeInputConfig(
+        #         automatic_activity_detection=types.AutomaticActivityDetection(
+        #             disabled=False,  # True = tắt auto detection, False = bật auto detection
+                    
+        #             # GIẢM SENSITIVITY - ít nhạy hơn
+        #             start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
+        #             end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
+                    
+        #             # # Tăng thời gian để giảm sensitivity
+        #             # prefix_padding_ms=500,  # Tăng từ 300 → 500ms (cần speech dài hơn mới commit)
+        #             # silence_duration_ms=1000,  # Tăng từ 500 → 1000ms (cần im lặng lâu hơn mới kết thúc)
+        #         ),
+                
+        #         activity_handling=types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+        #         # Options: START_OF_ACTIVITY_INTERRUPTS, NO_INTERRUPTION, ACTIVITY_HANDLING_UNSPECIFIED
+                
+        #         # turn_coverage=types.TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,x
+        #         # Options: TURN_INCLUDES_ONLY_ACTIVITY, TURN_INCLUDES_ALL_INPUT, TURN_COVERAGE_UNSPECIFIED
+        #     ),    
         response_modalities=[modality],
     )
 

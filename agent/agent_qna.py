@@ -1,7 +1,7 @@
 from google.adk.agents import Agent, SequentialAgent
 from google.genai import types 
 import json
-from prompt.agent_prompt_qna import HELP_INSTRUCION, GLOBAL_INTRUCTION
+from prompt.agent_prompt_qna import HELP_INSTRUCTION, GLOBAL_INTRUCTION
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import os
@@ -17,7 +17,7 @@ MODEL = os.getenv("MODEL", "gemini-live-2.5-flash-preview")
 pipeline_agent = Agent(
     name="help_user",
     model=MODEL,
-    instruction= HELP_INSTRUCION,
+    instruction= HELP_INSTRUCTION,
     global_instruction= GLOBAL_INTRUCTION,
 )
 
